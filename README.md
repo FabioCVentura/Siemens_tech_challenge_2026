@@ -115,3 +115,18 @@ python -m pip install -r requirements.txt
 # Run the pipeline
 python -m src.sales_analytics.main
 ```
+
+## Implementation Notes
+
+- Monthly customer revenue excludes orders with a negative `total_amount` (refunds), groups by customer and calendar month, and rounds currency totals to two decimal places. Blank order amounts load as `0.0`.
+- The top-products report ranks by summed `quantity * unit_price`, returns five products, and rounds totals to two decimal places. Negative quantities are retained in product revenue and generate a warning during loading.
+- Invalid or duplicate records and rows with missing foreign keys are logged and skipped. Data loads in dependency order, uses SQLite foreign keys, and checks the table row count after every load step. Missing required CSV columns fail with a descriptive error.
+- The database indexes `orders.customer_id` and `orders.order_date`. Optional inclusive `YYYY-MM-DD` date bounds filter both reports by order date; the start date cannot be later than the end date.
+- The documented CLI options are implemented: `--output-dir`, `--from-date`, and `--to-date`. Report queries, loader validation, and command-line behavior are documented in code docstrings and explicit log/error messages.
+- Each pipeline run creates a uniquely named `sales_analytics_<timestamp>.log` file in the selected output directory. The log contains timestamped run messages, details for all warnings and errors, and a final success/failure summary with warning and error counts. Pipeline exceptions are logged and then re-raised.
+
+Run with custom settings, for example:
+
+```bash
+python -m src.sales_analytics.main --output-dir ./custom_reports --from-date 2025-01-01 --to-date 2025-02-28
+```
