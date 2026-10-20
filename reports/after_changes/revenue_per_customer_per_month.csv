@@ -1,0 +1,13 @@
+customer_id,name,country,year_month,revenue
+6,Quantum Analytics,US,2025-01,3200.0
+4,Global Solutions Inc,US,2025-01,2200.0
+7,EuroTech BV,NL,2025-01,1350.25
+1,Acme Corp,US,2025-01,1200.0
+5,DataWorks AG,DE,2025-01,950.0
+9,Peak Performance Inc,US,2025-01,900.0
+2,TechStart GmbH,DE,2025-01,850.5
+10,Synergy Group,DE,2025-01,550.0
+3,Innovate Ltd,GB,2025-01,450.75
+4,Global Solutions Inc,US,2025-02,1800.0
+9,Peak Performance Inc,US,2025-02,1250.0
+8,Alpha Systems Ltd,GB,2025-02,1100.0
