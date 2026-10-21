@@ -4,6 +4,8 @@ from sqlite3 import Connection
 
 import pandas as pd
 
+from .config import EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE, TOP_PRODUCTS_LIMIT
+
 
 def _date_filters(
     from_date: date | None,
@@ -55,7 +57,9 @@ def compute_revenue_per_customer_month(
         columns, sorted by month ascending and revenue descending.
     """
     filters, parameters = _date_filters(from_date, to_date)
-    filters.insert(0, "o.total_amount >= 0")
+    if EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE:
+        filters.insert(0, "o.total_amount >= 0")
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = f"""
         SELECT
             c.customer_id,
@@ -65,7 +69,7 @@ def compute_revenue_per_customer_month(
             ROUND(SUM(o.total_amount), 2) AS revenue
         FROM orders AS o
         JOIN customers AS c ON c.customer_id = o.customer_id
-        WHERE {" AND ".join(filters)}
+        {where_clause}
         GROUP BY c.customer_id, c.name, c.country, year_month
         ORDER BY year_month ASC, revenue DESC, c.customer_id ASC
     """
@@ -74,7 +78,7 @@ def compute_revenue_per_customer_month(
 
 def compute_top_products(
     conn: Connection,
-    limit: int = 5,
+    limit: int = TOP_PRODUCTS_LIMIT,
     from_date: date | None = None,
     to_date: date | None = None,
 ) -> pd.DataFrame:
@@ -136,5 +140,10 @@ def generate_reports(
     df_rev = compute_revenue_per_customer_month(conn, from_date, to_date)
     df_rev.to_csv(output_dir / "revenue_per_customer_per_month.csv", index=False)
 
-    df_top = compute_top_products(conn, limit=5, from_date=from_date, to_date=to_date)
+    df_top = compute_top_products(
+        conn,
+        limit=TOP_PRODUCTS_LIMIT,
+        from_date=from_date,
+        to_date=to_date,
+    )
     df_top.to_csv(output_dir / "top_products.csv", index=False)
