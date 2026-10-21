@@ -22,6 +22,7 @@ class _RunSummaryFilter(logging.Filter):
         super().__init__()
         self.warning_count = 0
         self.error_count = 0
+        self.affected_row_count = 0
 
     def filter(self, record: logging.LogRecord) -> bool:
         """Count a log record while allowing it through to the log file.
@@ -36,6 +37,7 @@ class _RunSummaryFilter(logging.Filter):
             self.error_count += 1
         elif record.levelno >= logging.WARNING:
             self.warning_count += 1
+            self.affected_row_count += getattr(record, "affected_rows", 0)
         return True
 
 
@@ -146,7 +148,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         if conn is not None:
             conn.close()
         run_logger.info(
-            f"Run summary: status={status}; warnings={summary_filter.warning_count}; "
+            f"Run summary: status={status}; warning_categories="
+            f"{summary_filter.warning_count}; "
+            f"affected_rows={summary_filter.affected_row_count}; "
             f"errors={summary_filter.error_count}; log_file={log_path}."
         )
         run_logger.removeHandler(console_handler)

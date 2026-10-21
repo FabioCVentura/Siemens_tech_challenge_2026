@@ -118,12 +118,27 @@ python -m src.sales_analytics.main
 
 ## Implementation Notes
 
-- Monthly customer revenue excludes orders with a negative `total_amount` (refunds), groups by customer and calendar month, and rounds currency totals to two decimal places. Blank order amounts load as `0.0`.
-- The top-products report ranks by summed `quantity * unit_price`, returns five products, and rounds totals to two decimal places. Negative quantities are retained in product revenue and generate a warning during loading.
-- Invalid or duplicate records and rows with missing foreign keys are logged and skipped. Data loads in dependency order, uses SQLite foreign keys, and checks the table row count after every load step. Missing required CSV columns fail with a descriptive error.
+- The customer revenue report groups by customer and calendar month and excludes negative-amount refund orders. The product report ranks by summed `quantity * unit_price` and returns five products. Blank `total_amount` values default to `0.0`; negative quantities and missing foreign keys are reported as required by the exercise.
+- These configurable exercise settings are in `src/sales_analytics/config.py`: `EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE`, `TOP_PRODUCTS_LIMIT`, `BLANK_TOTAL_AMOUNT_DEFAULT`, `WARN_NEGATIVE_QUANTITIES`, and `WARN_MISSING_FOREIGN_KEYS`. Their defaults implement the exercise. Change them only if the business requirements are revised.
+- CSV headers are checked against the configured schemas in `src/sales_analytics/config.py`. Expected columns are required, unexpected columns are rejected by default, and column order does not matter. `ALLOW_EXTRA_CSV_COLUMNS` controls whether additional columns are accepted.
+- A full data load is atomic: if reading, validating, or inserting any source table fails, all inserts from that load are rolled back. Row-level data issues are summarized by type with counts and up to three example rows per type.
+- Integer fields must parse as integers; order dates must use `YYYY-MM-DD`; required text fields must be nonblank; numeric amounts and prices must be finite. Invalid rows and orphan foreign keys are skipped, while schema errors fail the load.
 - The database indexes `orders.customer_id` and `orders.order_date`. Optional inclusive `YYYY-MM-DD` date bounds filter both reports by order date; the start date cannot be later than the end date.
 - The documented CLI options are implemented: `--output-dir`, `--from-date`, and `--to-date`. Report queries, loader validation, and command-line behavior are documented in code docstrings and explicit log/error messages.
-- Each pipeline run creates a uniquely named `sales_analytics_<timestamp>.log` file in the selected output directory. The log contains timestamped run messages, details for all warnings and errors, and a final success/failure summary with warning and error counts. Pipeline exceptions are logged and then re-raised.
+- Each run creates a timestamped log in the selected output directory. Its summary distinguishes warning categories from total affected rows; details and representative source rows are included. Pipeline exceptions are logged and re-raised.
+
+### Suggestions to Discuss
+
+- The exercise requires warning about negative quantities but does not specify whether those rows should be retained. They are currently retained, so their values contribute to product revenue.
+- Missing foreign-key and malformed data rows are currently skipped after being counted and logged. Confirm whether a future business process should reject the full file instead.
+- Currency report values are rounded to two decimal places. Confirm whether this is the desired reporting precision.
+- The exercise does not define whether IDs or unit prices must be positive, or whether `orders.total_amount` must reconcile with its order-item totals. No such validation is applied; decide these rules with the business owner before adding them.
+
+Run the end-to-end data-quality tests with the standard library test runner:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 Run with custom settings, for example:
 
