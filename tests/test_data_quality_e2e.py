@@ -2,7 +2,7 @@ import csv
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock
 
 from src.sales_analytics import loaders
 from src.sales_analytics.analytics import (
@@ -24,8 +24,6 @@ class DataQualityEndToEndTests(unittest.TestCase):
         """
         self.temp_dir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.temp_dir.name)
-        self.data_dir_patch = patch.object(loaders, "DATA_DIR", self.data_dir)
-        self.data_dir_patch.start()
         self.connection = create_in_memory_db()
 
     def tearDown(self) -> None:
@@ -35,8 +33,21 @@ class DataQualityEndToEndTests(unittest.TestCase):
             None.
         """
         self.connection.close()
-        self.data_dir_patch.stop()
         self.temp_dir.cleanup()
+
+    def _load_all_data(
+        self,
+        *,
+        allow_extra_columns: bool = False,
+        blank_total_amount_default: float = 0.0,
+    ) -> None:
+        """Load fixtures from this test's temporary data directory."""
+        loaders.load_all_data(
+            self.connection,
+            data_dir=self.data_dir,
+            allow_extra_columns=allow_extra_columns,
+            blank_total_amount_default=blank_total_amount_default,
+        )
 
     def _write_csv(
         self,
@@ -249,7 +260,7 @@ class DataQualityEndToEndTests(unittest.TestCase):
         )
 
         with self.assertLogs(loaders.logger, level="WARNING") as captured:
-            loaders.load_all_data(self.connection)
+            self._load_all_data()
 
         warning_text = "\n".join(captured.output)
         self.assertIn("blank total_amount defaulted': 1 row(s)", warning_text)
@@ -331,7 +342,7 @@ class DataQualityEndToEndTests(unittest.TestCase):
                 )
 
                 with self.assertRaisesRegex(ValueError, "Invalid CSV"):
-                    loaders.load_all_data(self.connection)
+                    self._load_all_data()
 
                 for table in ("customers", "orders", "order_items"):
                     self.assertEqual(
@@ -341,8 +352,8 @@ class DataQualityEndToEndTests(unittest.TestCase):
                         0,
                     )
 
-    def test_extra_columns_can_be_enabled_by_configuration(self) -> None:
-        """Allow otherwise-unexpected columns when the configured policy opts in.
+    def test_extra_columns_can_be_enabled_by_parameter(self) -> None:
+        """Allow otherwise-unexpected columns when the caller opts in.
 
         Returns:
             None.
@@ -380,8 +391,7 @@ class DataQualityEndToEndTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(loaders, "ALLOW_EXTRA_CSV_COLUMNS", True):
-            loaders.load_all_data(self.connection)
+        self._load_all_data(allow_extra_columns=True)
 
         self.assertEqual(
             self.connection.execute("SELECT COUNT(*) FROM order_items").fetchone()[0],
@@ -389,7 +399,7 @@ class DataQualityEndToEndTests(unittest.TestCase):
         )
 
     def test_configurable_exercise_rules(self) -> None:
-        """Verify the exercise rules can be changed through configuration.
+        """Verify exercise rules can be overridden with function parameters.
 
         Returns:
             None.
@@ -419,19 +429,17 @@ class DataQualityEndToEndTests(unittest.TestCase):
             [],
         )
 
-        with patch.object(loaders, "BLANK_TOTAL_AMOUNT_DEFAULT", 2.5):
-            loaders.load_all_data(self.connection)
+        self._load_all_data(blank_total_amount_default=2.5)
 
         amount = self.connection.execute(
             "SELECT total_amount FROM orders WHERE order_id = 2"
         ).fetchone()[0]
         self.assertEqual(amount, 2.5)
 
-        with patch(
-            "src.sales_analytics.analytics.EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE",
-            False,
-        ):
-            revenue = compute_revenue_per_customer_month(self.connection)
+        revenue = compute_revenue_per_customer_month(
+            self.connection,
+            exclude_refunds=False,
+        )
         self.assertEqual(revenue.iloc[0].revenue, -2.5)
 
     def test_run_summary_counts_affected_rows_not_only_warning_categories(self) -> None:
@@ -441,9 +449,9 @@ class DataQualityEndToEndTests(unittest.TestCase):
             None.
         """
         summary_filter = _RunSummaryFilter()
-        warning = unittest.mock.Mock(levelno=30, affected_rows=4)
-        other_warning = unittest.mock.Mock(levelno=30, affected_rows=3)
-        error = unittest.mock.Mock(levelno=40, affected_rows=0)
+        warning = Mock(levelno=30, affected_rows=4)
+        other_warning = Mock(levelno=30, affected_rows=3)
+        error = Mock(levelno=40, affected_rows=0)
 
         summary_filter.filter(warning)
         summary_filter.filter(other_warning)
