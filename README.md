@@ -119,7 +119,11 @@ python -m src.sales_analytics.main
 ## Implementation Notes
 
 - The customer revenue report groups by customer and calendar month and excludes negative-amount refund orders. The product report ranks by summed `quantity * unit_price` and returns five products. Blank `total_amount` values default to `0.0`; negative quantities and missing foreign keys are reported as required by the exercise.
-- These configurable exercise settings are in `src/sales_analytics/config.py`: `EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE`, `TOP_PRODUCTS_LIMIT`, `BLANK_TOTAL_AMOUNT_DEFAULT`, `WARN_NEGATIVE_QUANTITIES`, and `WARN_MISSING_FOREIGN_KEYS`. Their defaults implement the exercise. Change them only if the business requirements are revised.
+- `src/sales_analytics/config.py` supplies defaults for report and loader behavior.
+  Override report behavior through `generate_reports()` (`top_products_limit`,
+  `exclude_refunds`) and loader behavior through `load_all_data()` (data
+  directory, CSV schemas, blank-amount default, and warning/schema policies).
+  These options are passed to the relevant lower-level functions.
 - CSV headers are checked against the configured schemas in `src/sales_analytics/config.py`. Expected columns are required, unexpected columns are rejected by default, and column order does not matter. `ALLOW_EXTRA_CSV_COLUMNS` controls whether additional columns are accepted.
 - A full data load is atomic: if reading, validating, or inserting any source table fails, all inserts from that load are rolled back. Row-level data issues are summarized by type with counts and up to three example rows per type.
 - Integer fields must parse as integers; order dates must use `YYYY-MM-DD`; required text fields must be nonblank; numeric amounts and prices must be finite. Invalid rows and orphan foreign keys are skipped, while schema errors fail the load.

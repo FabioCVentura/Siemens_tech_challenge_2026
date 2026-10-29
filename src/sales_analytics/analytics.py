@@ -42,6 +42,7 @@ def compute_revenue_per_customer_month(
     conn: Connection,
     from_date: date | None = None,
     to_date: date | None = None,
+    exclude_refunds: bool = EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE,
 ) -> pd.DataFrame:
     """Return non-refund revenue per customer and calendar month.
 
@@ -51,13 +52,14 @@ def compute_revenue_per_customer_month(
         conn: SQLite connection containing the sales tables.
         from_date: Optional inclusive lower bound for the order date.
         to_date: Optional inclusive upper bound for the order date.
+        exclude_refunds: Whether to exclude orders with negative totals.
 
     Returns:
         A DataFrame with customer_id, name, country, year_month, and revenue
         columns, sorted by month ascending and revenue descending.
     """
     filters, parameters = _date_filters(from_date, to_date)
-    if EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE:
+    if exclude_refunds:
         filters.insert(0, "o.total_amount >= 0")
     where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = f"""
@@ -123,6 +125,9 @@ def generate_reports(
     output_dir: Path,
     from_date: date | None = None,
     to_date: date | None = None,
+    *,
+    top_products_limit: int = TOP_PRODUCTS_LIMIT,
+    exclude_refunds: bool = EXCLUDE_REFUNDS_FROM_CUSTOMER_REVENUE,
 ) -> None:
     """Write the customer revenue and top-product reports as CSV files.
 
@@ -131,18 +136,25 @@ def generate_reports(
         output_dir: Directory where the report CSV files will be written.
         from_date: Optional inclusive lower bound for the order date.
         to_date: Optional inclusive upper bound for the order date.
+        top_products_limit: Maximum products included in the product report.
+        exclude_refunds: Whether customer revenue excludes refund orders.
 
     Returns:
         None.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    df_rev = compute_revenue_per_customer_month(conn, from_date, to_date)
+    df_rev = compute_revenue_per_customer_month(
+        conn,
+        from_date,
+        to_date,
+        exclude_refunds=exclude_refunds,
+    )
     df_rev.to_csv(output_dir / "revenue_per_customer_per_month.csv", index=False)
 
     df_top = compute_top_products(
         conn,
-        limit=TOP_PRODUCTS_LIMIT,
+        limit=top_products_limit,
         from_date=from_date,
         to_date=to_date,
     )

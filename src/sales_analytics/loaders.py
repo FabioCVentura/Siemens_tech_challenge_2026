@@ -1,6 +1,7 @@
 import logging
 import math
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -61,11 +62,26 @@ class _DataQualitySummary:
             )
 
 
-def load_all_data(conn: Connection) -> None:
+def load_all_data(
+    conn: Connection,
+    *,
+    data_dir: Path = DATA_DIR,
+    csv_schemas: Mapping[str, Sequence[str]] = CSV_SCHEMAS,
+    allow_extra_columns: bool = ALLOW_EXTRA_CSV_COLUMNS,
+    blank_total_amount_default: float = BLANK_TOTAL_AMOUNT_DEFAULT,
+    warn_negative_quantities: bool = WARN_NEGATIVE_QUANTITIES,
+    warn_missing_foreign_keys: bool = WARN_MISSING_FOREIGN_KEYS,
+) -> None:
     """Atomically load all source tables in foreign-key dependency order.
 
     Args:
         conn: SQLite connection with the pipeline schema initialized.
+        data_dir: Directory containing the source CSV files.
+        csv_schemas: Required columns for each source CSV.
+        allow_extra_columns: Whether unconfigured CSV columns are accepted.
+        blank_total_amount_default: Replacement for blank order totals.
+        warn_negative_quantities: Whether negative quantities are logged.
+        warn_missing_foreign_keys: Whether orphan rows are logged.
 
     Returns:
         None.
@@ -76,9 +92,31 @@ def load_all_data(conn: Connection) -> None:
     issues = _DataQualitySummary()
     conn.execute("SAVEPOINT sales_analytics_load")
     try:
-        load_customers(conn, issues)
-        load_orders(conn, issues)
-        load_order_items(conn, issues)
+        load_customers(
+            conn,
+            issues,
+            data_dir=data_dir,
+            csv_schemas=csv_schemas,
+            allow_extra_columns=allow_extra_columns,
+        )
+        load_orders(
+            conn,
+            issues,
+            data_dir=data_dir,
+            csv_schemas=csv_schemas,
+            allow_extra_columns=allow_extra_columns,
+            blank_total_amount_default=blank_total_amount_default,
+            warn_missing_foreign_keys=warn_missing_foreign_keys,
+        )
+        load_order_items(
+            conn,
+            issues,
+            data_dir=data_dir,
+            csv_schemas=csv_schemas,
+            allow_extra_columns=allow_extra_columns,
+            warn_negative_quantities=warn_negative_quantities,
+            warn_missing_foreign_keys=warn_missing_foreign_keys,
+        )
         issues.log_warnings()
         conn.execute("RELEASE SAVEPOINT sales_analytics_load")
         row_counts = {
@@ -96,14 +134,18 @@ def load_all_data(conn: Connection) -> None:
 def _read_csv(
     filename: str,
     *,
-    allow_extra_columns: bool | None = None,
+    data_dir: Path,
+    csv_schemas: Mapping[str, Sequence[str]],
+    allow_extra_columns: bool,
 ) -> list[dict[str, str]]:
     """Read a configured CSV and enforce its column schema.
 
     Args:
-        filename: CSV filename relative to the configured data directory.
+        filename: CSV filename relative to the provided data directory.
+        data_dir: Directory containing the source CSV file.
+        csv_schemas: Required columns for each source CSV.
         allow_extra_columns: Whether columns beyond the configured schema are
-            accepted. Defaults to the project-level schema policy.
+            accepted.
 
     Returns:
         CSV records as dictionaries with string values.
@@ -113,20 +155,16 @@ def _read_csv(
             are missing, or unexpected columns are disallowed.
         FileNotFoundError: If the requested CSV file does not exist.
     """
-    if filename not in CSV_SCHEMAS:
+    if filename not in csv_schemas:
         raise ValueError(f"No CSV schema is configured for {filename}.")
 
-    path = Path(DATA_DIR) / filename
+    path = Path(data_dir) / filename
     dataframe = pd.read_csv(path, dtype=str, keep_default_na=False)
-    expected_columns = set(CSV_SCHEMAS[filename])
+    expected_columns = set(csv_schemas[filename])
     actual_columns = set(dataframe.columns)
     missing_columns = sorted(expected_columns - actual_columns)
     extra_columns = sorted(actual_columns - expected_columns)
-    reject_extra_columns = (
-        not ALLOW_EXTRA_CSV_COLUMNS
-        if allow_extra_columns is None
-        else not allow_extra_columns
-    )
+    reject_extra_columns = not allow_extra_columns
 
     if missing_columns or (extra_columns and reject_extra_columns):
         problems = []
@@ -228,19 +266,31 @@ def _finish_load(
 def load_customers(
     conn: Connection,
     issues: _DataQualitySummary | None = None,
+    *,
+    data_dir: Path = DATA_DIR,
+    csv_schemas: Mapping[str, Sequence[str]] = CSV_SCHEMAS,
+    allow_extra_columns: bool = ALLOW_EXTRA_CSV_COLUMNS,
 ) -> None:
     """Load valid customers and record malformed or duplicate rows.
 
     Args:
         conn: SQLite connection with the customers table initialized.
         issues: Optional shared collector for run-level issue summaries.
+        data_dir: Directory containing customers.csv.
+        csv_schemas: Required columns for each source CSV.
+        allow_extra_columns: Whether unconfigured CSV columns are accepted.
 
     Returns:
         None.
     """
     issue_summary = issues if issues is not None else _DataQualitySummary()
     log_summary = issues is None
-    rows = _read_csv("customers.csv")
+    rows = _read_csv(
+        "customers.csv",
+        data_dir=data_dir,
+        csv_schemas=csv_schemas,
+        allow_extra_columns=allow_extra_columns,
+    )
     starting_count = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
     existing_ids = _existing_ids(conn, "customers", "customer_id")
     inserted_count = 0
@@ -284,19 +334,35 @@ def load_customers(
 def load_orders(
     conn: Connection,
     issues: _DataQualitySummary | None = None,
+    *,
+    data_dir: Path = DATA_DIR,
+    csv_schemas: Mapping[str, Sequence[str]] = CSV_SCHEMAS,
+    allow_extra_columns: bool = ALLOW_EXTRA_CSV_COLUMNS,
+    blank_total_amount_default: float = BLANK_TOTAL_AMOUNT_DEFAULT,
+    warn_missing_foreign_keys: bool = WARN_MISSING_FOREIGN_KEYS,
 ) -> None:
     """Load valid orders, default blank amounts, and record row-level issues.
 
     Args:
         conn: SQLite connection with customers and orders initialized.
         issues: Optional shared collector for run-level issue summaries.
+        data_dir: Directory containing orders.csv.
+        csv_schemas: Required columns for each source CSV.
+        allow_extra_columns: Whether unconfigured CSV columns are accepted.
+        blank_total_amount_default: Replacement for blank order totals.
+        warn_missing_foreign_keys: Whether orphan orders are logged.
 
     Returns:
         None.
     """
     issue_summary = issues if issues is not None else _DataQualitySummary()
     log_summary = issues is None
-    rows = _read_csv("orders.csv")
+    rows = _read_csv(
+        "orders.csv",
+        data_dir=data_dir,
+        csv_schemas=csv_schemas,
+        allow_extra_columns=allow_extra_columns,
+    )
     starting_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
     existing_ids = _existing_ids(conn, "orders", "order_id")
     customer_ids = _existing_ids(conn, "customers", "customer_id")
@@ -314,7 +380,7 @@ def load_orders(
             if amount_text:
                 total_amount = _parse_number(amount_text)
             else:
-                total_amount = BLANK_TOTAL_AMOUNT_DEFAULT
+                total_amount = blank_total_amount_default
                 issue_summary.record(
                     "blank total_amount defaulted",
                     f"orders.csv row {line_number}: order_id={order_id}, "
@@ -328,7 +394,7 @@ def load_orders(
             continue
 
         if customer_id not in customer_ids:
-            if WARN_MISSING_FOREIGN_KEYS:
+            if warn_missing_foreign_keys:
                 issue_summary.record(
                     "missing customer foreign key",
                     f"orders.csv row {line_number}: customer_id={customer_id}",
@@ -359,19 +425,35 @@ def load_orders(
 def load_order_items(
     conn: Connection,
     issues: _DataQualitySummary | None = None,
+    *,
+    data_dir: Path = DATA_DIR,
+    csv_schemas: Mapping[str, Sequence[str]] = CSV_SCHEMAS,
+    allow_extra_columns: bool = ALLOW_EXTRA_CSV_COLUMNS,
+    warn_negative_quantities: bool = WARN_NEGATIVE_QUANTITIES,
+    warn_missing_foreign_keys: bool = WARN_MISSING_FOREIGN_KEYS,
 ) -> None:
     """Load valid line items and summarize format, quantity, and FK issues.
 
     Args:
         conn: SQLite connection with orders already loaded.
         issues: Optional shared collector for run-level issue summaries.
+        data_dir: Directory containing order_items.csv.
+        csv_schemas: Required columns for each source CSV.
+        allow_extra_columns: Whether unconfigured CSV columns are accepted.
+        warn_negative_quantities: Whether negative quantities are logged.
+        warn_missing_foreign_keys: Whether orphan line items are logged.
 
     Returns:
         None.
     """
     issue_summary = issues if issues is not None else _DataQualitySummary()
     log_summary = issues is None
-    rows = _read_csv("order_items.csv")
+    rows = _read_csv(
+        "order_items.csv",
+        data_dir=data_dir,
+        csv_schemas=csv_schemas,
+        allow_extra_columns=allow_extra_columns,
+    )
     starting_count = conn.execute("SELECT COUNT(*) FROM order_items").fetchone()[0]
     existing_ids = _existing_ids(conn, "order_items", "order_item_id")
     order_ids = _existing_ids(conn, "orders", "order_id")
@@ -397,7 +479,7 @@ def load_order_items(
             )
             continue
         if order_id not in order_ids:
-            if WARN_MISSING_FOREIGN_KEYS:
+            if warn_missing_foreign_keys:
                 issue_summary.record(
                     "missing order foreign key",
                     f"order_items.csv row {line_number}: order_id={order_id}",
@@ -409,7 +491,7 @@ def load_order_items(
                 f"order_items.csv row {line_number}: order_item_id={order_item_id}",
             )
             continue
-        if quantity < 0 and WARN_NEGATIVE_QUANTITIES:
+        if quantity < 0 and warn_negative_quantities:
             issue_summary.record(
                 "negative quantity retained",
                 f"order_items.csv row {line_number}: "
